@@ -122,7 +122,7 @@ class BaseEstimator(object):
 
     def feature_corelation(self, data: DataNode):
         X0, y0 = data.data
-        X, y = self.data_transformer(data).data
+        X, y = self.data_transform(data).data
         i = X0.shape[1]
         j = X.shape[1]
         corre_mat = np.zeros([i, j])
