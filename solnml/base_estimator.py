@@ -128,7 +128,7 @@ class BaseEstimator(object):
         corre_mat = np.zeros([i, j])
         for it in range(i):
             for jt in range(j):
-                corre_mat[it, jt] = np.corrcoef(X0[:, it], X[:, jt])[0, 1]
+                corre_mat[jt, it] = np.corrcoef(X0[:, it], X[:, jt])[0, 1]
         df = pd.DataFrame(corre_mat)
         df.columns = ['origin_fearure' + str(it) for it in range(i)]
         df.index = ['transformed_fearure' + str(jt) for jt in range(j)]
