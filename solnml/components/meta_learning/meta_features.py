@@ -586,7 +586,41 @@ class SkewnessSTD(MetaFeature):
         std = np.nanstd(skews) if len(skews) > 0 else 0
         return std if np.isfinite(std) else 0
 
+@metafeatures.define("Kurtosisses_y")
+class Kurtosisses_y(MetaFeature):
+    def _calculate(self, X, y, categorical):
+        return float(scipy.stats.kurtosis(y))
 
+@metafeatures.define("Skewness_y")
+class Skewness_y(MetaFeature):
+    def _calculate(self, X, y, categorical):
+        return float(scipy.stats.scipy.stats.skew(y))
+
+@metafeatures.define("Min_y")
+class Min_y(MetaFeature):
+    def _calculate(self, X, y, categorical):
+        return float(np.min(y))
+
+@metafeatures.define("Max_y")
+class Max_y(MetaFeature):
+    def _calculate(self, X, y, categorical):
+        return float(np.max(y))
+
+@metafeatures.define("Percentile25_y")
+class Percentile25_y(MetaFeature):
+    def _calculate(self, X, y, categorical):
+        return float(np.percentile(y, 25))
+
+@metafeatures.define("Percentile50_y")
+class Percentile50_y(MetaFeature):
+    def _calculate(self, X, y, categorical):
+        return float(np.percentile(y, 50))
+
+@metafeatures.define("Percentile75_y")
+class Percentile75_y(MetaFeature):
+    def _calculate(self, X, y, categorical):
+        return float(np.percentile(y, 75))
+        
 # @metafeatures.define("cancor1")
 # def cancor1(X, y):
 #    pass
