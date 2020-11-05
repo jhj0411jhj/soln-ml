@@ -51,7 +51,7 @@ def evaluate_sys(run_id, task_type, mth, dataset, ens_method,
                                evaluation=eval_type,
                                enable_meta_algorithm_selection=False,
                                metric='bal_acc',
-                               # include_algorithms=['extra_trees'],
+                               include_algorithms=['extra_trees', 'random_forest'],
                                n_jobs=1)
     else:
         from solnml.estimators import Regressor
@@ -63,21 +63,24 @@ def evaluate_sys(run_id, task_type, mth, dataset, ens_method,
                               enable_meta_algorithm_selection=False,
                               metric='mse',
                               # include_preprocessors=['percentile_selector_regression'],
-                              # include_algorithms=['k_nearest_neighbors'],
+                              include_algorithms=['random_forest'],
                               n_jobs=1)
 
     start_time = time.time()
     estimator.fit(train_data, opt_strategy=mth)
-    pred = estimator.predict(test_data)
-    if task_type == 'cls':
-        test_score = balanced_accuracy_score(test_data.data[1], pred)
-    else:
-        test_score = mean_squared_error(test_data.data[1], pred)
+    # print(estimator.get_ens_model_info())
+    predictions = estimator.predict(test_data)
+    test_score = []
+    for pred in predictions:
+        if task_type == 'cls':
+            test_score.append(balanced_accuracy_score(test_data.data[1], pred))
+        else:
+            test_score.append(mean_squared_error(test_data.data[1], pred))
     validation_score = estimator._ml_engine.solver.incumbent_perf
     eval_dict = estimator._ml_engine.solver.get_eval_dict()
     print('Run ID         : %d' % run_id)
     print('Dataset        : %s' % dataset)
-    print('Val/Test score : %f - %f' % (validation_score, test_score))
+    print('Val/Test score : %f - %s' % (validation_score, str(test_score)))
 
     save_path = save_folder + '%s_%s_%s_%d_%d_%d.pkl' % (
         task_type, mth, dataset, time_limit, (ens_method is None), run_id)

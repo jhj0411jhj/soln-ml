@@ -168,55 +168,95 @@ class FirstLayerBandit(object):
             self.best_fe_config, self.best_hpo_config = sorted(eval_dict.items(), key=lambda t: t[1], reverse=True)[0][
                 0]
 
-        if self.ensemble_method is not None:
-            if self.inner_opt_algorithm == 'combined':
-                config_path = os.path.join(self.output_dir, '%s_topk_config.pkl' % self.timestamp)
-                with open(config_path, 'rb') as f:
-                    stats = pkl.load(f)
+        if self.inner_opt_algorithm == 'combined':
+            config_path = os.path.join(self.output_dir, '%s_topk_config.pkl' % self.timestamp)
+            with open(config_path, 'rb') as f:
+                stats = pkl.load(f)
 
-                from solnml.components.ensemble.combined_ensemble.ensemble_bulider import EnsembleBuilder
-            else:
-                config_path = os.path.join(self.output_dir, '%s_topk_config.pkl' % self.timestamp)
-                with open(config_path, 'rb') as f:
-                    stats = pkl.load(f)
+            from solnml.components.ensemble.combined_ensemble.ensemble_bulider import EnsembleBuilder
+        else:
+            config_path = os.path.join(self.output_dir, '%s_topk_config.pkl' % self.timestamp)
+            with open(config_path, 'rb') as f:
+                stats = pkl.load(f)
 
-                from solnml.components.ensemble import EnsembleBuilder
+            from solnml.components.ensemble import EnsembleBuilder
 
-            # Ensembling all intermediate/ultimate models found in above optimization process.
-            self.es = EnsembleBuilder(stats=stats,
-                                      data_node=self.original_data,
-                                      ensemble_method=self.ensemble_method,
-                                      ensemble_size=self.ensemble_size,
-                                      task_type=self.task_type,
-                                      metric=self.metric,
-                                      output_dir=self.output_dir)
-            self.es.fit(data=self.original_data)
+        # Ensembling all intermediate/ultimate models found in above optimization process.
+        # DIFFERENCE WITH DEV: Build all ensemble models
+        self.bagging = EnsembleBuilder(stats=stats,
+                                       data_node=self.original_data,
+                                       ensemble_method='bagging',
+                                       ensemble_size=10,
+                                       task_type=self.task_type,
+                                       metric=self.metric,
+                                       output_dir=self.output_dir)
+        self.bagging.fit(data=self.original_data)
+
+        self.stacking = EnsembleBuilder(stats=stats,
+                                        data_node=self.original_data,
+                                        ensemble_method='stacking',
+                                        ensemble_size=10,
+                                        task_type=self.task_type,
+                                        metric=self.metric,
+                                        output_dir=self.output_dir)
+        self.stacking.fit(data=self.original_data)
+
+        self.es = EnsembleBuilder(stats=stats,
+                                  data_node=self.original_data,
+                                  ensemble_method='ensemble_selection',
+                                  ensemble_size=50,
+                                  task_type=self.task_type,
+                                  metric=self.metric,
+                                  output_dir=self.output_dir)
+        self.es.fit(data=self.original_data)
 
     def refit(self):
         if self.ensemble_method is not None:
             self.es.refit()
 
     def _predict(self, test_data: DataNode):
-        if self.ensemble_method is not None:
-            if self.es is None:
-                raise AttributeError("AutoML is not fitted!")
-            return self.es.predict(test_data)
+        # if self.ensemble_method is not None:
+        #     if self.es is None:
+        #         raise AttributeError("AutoML is not fitted!")
+        #     return self.es.predict(test_data)
+        # else:
+        #     if self.inner_opt_algorithm == 'combined':
+        #         best_op_list, estimator = load_combined_transformer_estimator(self.output_dir, self.best_config,
+        #                                                                       self.timestamp)
+        #     else:
+        #         best_op_list, estimator = load_transformer_estimator(self.output_dir, self.optimal_algo_id,
+        #                                                              self.best_hpo_config,
+        #                                                              self.best_fe_config, self.timestamp)
+        #
+        #     test_data_node = test_data.copy_()
+        #     test_data_node = construct_node(test_data_node, best_op_list)
+        #
+        #     if self.task_type in CLS_TASKS:
+        #         return estimator.predict_proba(test_data_node.data[0])
+        #     else:
+        #         return estimator.predict(test_data_node.data[0])
+
+        self.predictions = []
+        if self.inner_opt_algorithm == 'combined':
+            best_op_list, estimator = load_combined_transformer_estimator(self.output_dir, self.best_config,
+                                                                          self.timestamp)
         else:
-            if self.inner_opt_algorithm == 'combined':
-                best_op_list, estimator = load_combined_transformer_estimator(self.output_dir, self.best_config,
-                                                                              self.timestamp)
-            else:
-                best_op_list, estimator = load_transformer_estimator(self.output_dir, self.optimal_algo_id,
-                                                                     self.best_hpo_config, self.best_fe_config,
-                                                                     self.timestamp)
+            best_op_list, estimator = load_transformer_estimator(self.output_dir, self.optimal_algo_id,
+                                                                 self.best_hpo_config, self.best_fe_config,
+                                                                 self.timestamp)
 
-            test_data_node = test_data.copy_()
-            test_data_node = construct_node(test_data_node, best_op_list)
+        test_data_node = test_data.copy_()
+        test_data_node = construct_node(test_data_node, best_op_list)
 
-            if self.task_type in CLS_TASKS:
-                return estimator.predict_proba(test_data_node.data[0])
-            else:
-                return estimator.predict(test_data_node.data[0])
+        if self.task_type in CLS_TASKS:
+            self.predictions.append(estimator.predict_proba(test_data_node.data[0]))
+        else:
+            self.predictions.append(estimator.predict(test_data_node.data[0]))
+
+        self.predictions.append(self.bagging.predict(test_data))
+        self.predictions.append(self.stacking.predict(test_data))
+        self.predictions.append(self.es.predict(test_data))
+        return self.predictions
 
     def predict_proba(self, test_data: DataNode):
         if self.task_type not in CLS_TASKS:
@@ -225,8 +265,11 @@ class FirstLayerBandit(object):
 
     def predict(self, test_data: DataNode):
         if self.task_type in CLS_TASKS:
+            # DIFFERENCE
             pred = self._predict(test_data)
-            return np.argmax(pred, axis=-1)
+            for i, pre in enumerate(pred):
+                pred[i] = np.argmax(pre, axis=-1)
+            return pred
         else:
             return self._predict(test_data)
 
