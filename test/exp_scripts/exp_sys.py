@@ -51,7 +51,7 @@ def evaluate_sys(run_id, task_type, mth, dataset, ens_method,
                                evaluation=eval_type,
                                enable_meta_algorithm_selection=False,
                                metric='bal_acc',
-                               include_algorithms=['extra_trees', 'random_forest'],
+                               # include_algorithms=['extra_trees', 'random_forest'],
                                n_jobs=1)
     else:
         from solnml.estimators import Regressor
@@ -63,7 +63,7 @@ def evaluate_sys(run_id, task_type, mth, dataset, ens_method,
                               enable_meta_algorithm_selection=False,
                               metric='mse',
                               # include_preprocessors=['percentile_selector_regression'],
-                              include_algorithms=['random_forest'],
+                              # include_algorithms=['random_forest'],
                               n_jobs=1)
 
     start_time = time.time()
@@ -82,8 +82,8 @@ def evaluate_sys(run_id, task_type, mth, dataset, ens_method,
     print('Dataset        : %s' % dataset)
     print('Val/Test score : %f - %s' % (validation_score, str(test_score)))
 
-    save_path = save_folder + '%s_%s_%s_%d_%d_%d.pkl' % (
-        task_type, mth, dataset, time_limit, (ens_method is None), run_id)
+    save_path = save_folder + '%s_%s_%s_%d_%d.pkl' % (
+        task_type, mth, dataset, time_limit, run_id)
     with open(save_path, 'wb') as f:
         pickle.dump([dataset, validation_score, test_score, start_time, eval_dict], f)
 
@@ -93,6 +93,16 @@ def evaluate_sys(run_id, task_type, mth, dataset, ens_method,
 
 def evaluate_ausk(run_id, task_type, mth, dataset, ens_method,
                   eval_type='holdout', time_limit=1200, seed=1):
+    tmp_dir = 'data/exp_sys/ausk_tmp_%s_%s_%s_%d_%d' % (task_type, mth, dataset, time_limit, run_id)
+    output_dir = 'data/exp_sys/ausk_output_%s_%s_%s_%d_%d' % (task_type, mth, dataset, time_limit, run_id)
+
+    if os.path.exists(tmp_dir):
+        try:
+            shutil.rmtree(tmp_dir)
+            shutil.rmtree(output_dir)
+        except:
+            pass
+
     if task_type == 'cls':
         automl = autosklearn.classification.AutoSklearnClassifier(
             time_left_for_this_task=int(time_limit),
@@ -102,8 +112,10 @@ def evaluate_ausk(run_id, task_type, mth, dataset, ens_method,
             ensemble_memory_limit=16384,
             ml_memory_limit=16384,
             ensemble_size=1 if ens_method is None else 50,
-            ensemble_nbest=1,
+            ensemble_nbest=20,
             initial_configurations_via_metalearning=0,
+            tmp_folder=tmp_dir,
+            output_folder=output_dir,
             delete_tmp_folder_after_terminate=False,
             delete_output_folder_after_terminate=False,
             seed=int(seed),
@@ -119,8 +131,10 @@ def evaluate_ausk(run_id, task_type, mth, dataset, ens_method,
             ensemble_memory_limit=16384,
             ml_memory_limit=16384,
             ensemble_size=1 if ens_method is None else 50,
-            ensemble_nbest=1,
+            ensemble_nbest=20,
             initial_configurations_via_metalearning=0,
+            tmp_folder=tmp_dir,
+            output_folder=output_dir,
             delete_tmp_folder_after_terminate=False,
             delete_output_folder_after_terminate=False,
             seed=int(seed),
@@ -160,17 +174,20 @@ def evaluate_ausk(run_id, task_type, mth, dataset, ens_method,
     result_time = automl.cv_results_['mean_fit_time']
 
     print('=' * 10)
-    print(model_desc)
+    # print(model_desc)
     print(str_stats)
     print('=' * 10)
 
     print('Validation score', validation_score)
     print('Test score', test_score)
-    print(automl.show_models())
+    # print(automl.show_models())
     save_path = save_folder + '%s_%s_%s_%d_%d_%d.pkl' % (
         task_type, mth, dataset, time_limit, (ens_method is None), run_id)
     with open(save_path, 'wb') as f:
         pickle.dump([dataset, validation_score, test_score, start_time, result_score, result_time], f)
+
+    shutil.rmtree(output_dir)
+    shutil.rmtree(os.path.join(tmp_dir, '.auto-sklearn'))
 
 
 if __name__ == "__main__":
