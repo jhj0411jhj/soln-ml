@@ -150,10 +150,10 @@ def evaluate_ausk(run_id, task_type, mth, dataset, ens_method, enable_meta,
                  for _type in train_data.feature_types]
     from autosklearn.metrics import make_scorer
     if task_type == 'cls':
-        scorer = make_scorer(name='bal_acc', score_func=balanced_accuracy_score)
+        scorer = make_scorer(name='balanced_accuracy', score_func=balanced_accuracy_score)
         score_func = balanced_accuracy_score
     else:
-        scorer = make_scorer(name='bal_acc', score_func=mean_squared_error, greater_is_better=False)
+        scorer = make_scorer(name='mean_squared_error', score_func=mean_squared_error, greater_is_better=False)
         score_func = mean_squared_error
     start_time = time.time()
     automl.fit(X.copy(), y.copy(), feat_type=feat_type,
