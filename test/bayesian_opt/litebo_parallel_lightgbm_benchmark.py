@@ -1,9 +1,8 @@
 """
 example cmdline:
 
-python test/bayesian_opt/litebo_lightgbm_benchmark.py --mths lite_bo,smac,tpe --datasets wind --n 10 --rep 2 --n_jobs 4
-
-python test/bayesian_opt/litebo_lightgbm_benchmark.py --plot_mode 1 --mths lite_bo,smac,tpe --datasets wind --n 10
+python test/bayesian_opt/litebo_parallel_lightgbm_benchmark.py \
+--mths sync --datasets wind --n 10 --rep 1 --n_jobs 1 --batch_size 8
 
 """
 
@@ -13,6 +12,7 @@ import time
 import argparse
 import numpy as np
 import pickle as pk
+from multiprocessing import Process, Manager
 
 from ConfigSpace.configuration_space import ConfigurationSpace
 from ConfigSpace.conditions import EqualsCondition, InCondition
@@ -26,26 +26,36 @@ sys.path.insert(0, "../lite-bo")
 from solnml.datasets.utils import load_train_test_data
 from solnml.components.metrics.metric import get_metric
 from solnml.components.utils.constants import MULTICLASS_CLS
-from litebo.optimizer.smbo import SMBO
+from litebo.optimizer.message_queue_smbo import mqSMBO
+from litebo.core.message_queue.worker import Worker
 
 
 default_datasets = 'optdigits,satimage,wind,delta_ailerons,puma8NH,kin8nm,cpu_small,puma32H,cpu_act,bank32nh'
-default_mths = 'lite_bo,smac,tpe'   # 'lite_bo,smac,tpe,sync-8,async-8'
+default_mths = 'sync,async'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--mths', type=str, default=default_mths)
-parser.add_argument('--plot_mode', type=int, default=0)
 parser.add_argument('--datasets', type=str, default=default_datasets)
 parser.add_argument('--n_jobs', type=int, default=2)
 parser.add_argument('--n', type=int, default=200)
 parser.add_argument('--rep', type=int, default=1)
 
+parser.add_argument('--batch_size', type=int, default=8)
+parser.add_argument('--ip', type=str, default='127.0.0.1')
+parser.add_argument('--port', type=int, default=0)
+
 args = parser.parse_args()
 test_datasets = args.datasets.split(',')
 print("datasets num=", len(test_datasets))
 mths = args.mths.split(',')
-plot_mode = args.plot_mode
 max_runs = args.n
+n_jobs = args.n_jobs
+rep = args.rep
+
+batch_size = args.batch_size
+ip = args.ip
+port = args.port if args.port else 13579 + np.random.randint(1000)
+print("port=", port)
 
 
 class LightGBM:
@@ -127,8 +137,9 @@ def get_estimator(config):
     return estimator
 
 
-def evaluate(mth, dataset, run_id):
-    print(mth, dataset, run_id)
+def evaluate_parallel(mth, batch_size, dataset, run_id):
+    assert mth in ['sync', 'async']
+    print(mth, batch_size, dataset, run_id)
     train_data, test_data = load_train_test_data(dataset, test_size=0.3, task_type=MULTICLASS_CLS)
 
     def objective_function(config):
@@ -139,47 +150,31 @@ def evaluate(mth, dataset, run_id):
         estimator.fit(X_train, y_train)
         return -metric(estimator, X_test, y_test)
 
-    def tpe_objective_function(config):
-        metric = get_metric('bal_acc')
-        estimator = get_estimator(config)
-        X_train, y_train = train_data.data
-        X_test, y_test = test_data.data
-        estimator.fit(X_train, y_train)
-        return -metric(estimator, X_test, y_test)
-
     config_space = get_configspace()
 
-    if mth == 'lite_bo':
-        bo = SMBO(objective_function, config_space, max_runs=max_runs, time_limit_per_trial=600,
-                  random_state=np.random.randint(10000))
+    def master_run(return_list):
+        bo = mqSMBO(None, config_space, max_runs=max_runs, time_limit_per_trial=600, parallel_strategy=mth,
+                    batch_size=batch_size, ip='', port=port, random_state=np.random.randint(10000))
         bo.run()
-        perfs = bo.benchmark_perfs
-    elif mth == 'smac':
-        from smac.scenario.scenario import Scenario
-        from smac.facade.smac_facade import SMAC
-        # Scenario object
-        scenario = Scenario({"run_obj": "quality",
-                             "runcount-limit": max_runs,
-                             "cs": config_space,
-                             "deterministic": "true"
-                             })
-        smac = SMAC(scenario=scenario, rng=np.random.RandomState(42),
-                    tae_runner=objective_function)
-        # incumbent = smac.optimize()
-        # perf_bo = objective_function(incumbent)
-        smac.optimize()
-        # keys = [k.config_id for k in smac.runhistory.data.keys()]
-        # print("key len=", len(keys), "unique=", len(set(keys)))
-        perfs = [v.cost for v in smac.runhistory.data.values()]
-    elif mth == 'tpe':
-        config_space = get_configspace('tpe')
-        from hyperopt import tpe, fmin, Trials
-        trials = Trials()
-        fmin(tpe_objective_function, config_space, tpe.suggest, max_runs, trials=trials)
-        perfs = [trial['result']['loss'] for trial in trials.trials]
-    else:
-        raise ValueError('Invalid method.')
-    return perfs
+        return_list.extend(bo.benchmark_perfs[:max_runs])   # send to return list. may exceed max_runs in sync
+
+    def worker_run(i):
+        worker = Worker(objective_function, ip, port)
+        worker.run()
+        print("Worker %d exit." % (i))
+
+    manager = Manager()
+    perfs = manager.list()  # shared list
+    master = Process(target=master_run, args=(perfs,))
+    master.start()
+
+    time.sleep(15)  # wait for master init
+    for i in range(batch_size):
+        worker = Process(target=worker_run, args=(i,))
+        worker.start()
+
+    master.join()   # wait for master to gen result
+    return list(perfs)  # covert it
 
 
 def check_datasets(datasets, task_type=MULTICLASS_CLS):
@@ -199,76 +194,30 @@ class Timer:
         print("[%s]Start." % self.name)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type == SystemExit:  # worker exit, don't output
+            print("this is", self.name)
+            return
         self.end = time.time()
         m, s = divmod(self.end - self.start, 60)
         h, m = divmod(m, 60)
         print("[%s]Total time = %d hours, %d minutes, %d seconds." % (self.name, h, m, s))
 
 
-def descending(x):
-    def _descending(x):
-        y = [x[0]]
-        for i in range(1, len(x)):
-            y.append(min(y[-1], x[i]))
-        return y
-
-    if isinstance(x[0], list):
-        y = []
-        for xi in x:
-            y.append(_descending(xi))
-        return y
-    else:
-        return _descending(x)
-
-
-if plot_mode != 1:
-    n_jobs = args.n_jobs
-    rep = args.rep
-
-    with Timer('All'):
-        check_datasets(test_datasets)
-        for dataset in test_datasets:
-            for mth in mths:
-                for i in range(rep):
-                    random_id = np.random.randint(10000)
-                    with Timer('%s-%s-%d-%d' % (mth, dataset, i, random_id)):
-                        perfs = evaluate(mth, dataset, random_id)
-                        print("len=", len(perfs), "unique=", len(set(perfs)))
-
-                        timestamp = time.strftime('%Y-%m-%d-%H:%M:%S', time.localtime(time.time()))
-                        dir_path = 'logs/litebo_benchmark_lightgbm_%d/%s/' % (max_runs, mth)
-                        file = 'benchmark_%s_%s_%s_%04d.pkl' % (mth, dataset, timestamp, random_id)
-                        if not os.path.exists(dir_path):
-                            os.makedirs(dir_path)
-                        with open(os.path.join(dir_path, file), 'wb') as f:
-                            pk.dump(perfs, f)
-
-else:
-    import matplotlib.pyplot as plt
+with Timer('All'):
+    check_datasets(test_datasets)
     for dataset in test_datasets:
-        plot_list = []
-        legend_list = []
         for mth in mths:
-            result = []
-            dir_path = 'logs/litebo_benchmark_lightgbm_%d/%s/' % (max_runs, mth)
-            for file in os.listdir(dir_path):
-                if file.startswith('benchmark_%s_%s_' % (mth, dataset)) and file.endswith('.pkl'):
-                    with open(os.path.join(dir_path, file), 'rb') as f:
-                        perfs = pk.load(f)
-                    assert len(perfs) == max_runs
-                    result.append(descending(perfs))    # descent curve
-            print('result rep=', len(result))
-            mean_res = np.mean(result, axis=0)
-            std_res = np.std(result, axis=0)
+            for i in range(rep):
+                random_id = np.random.randint(10000)
+                with Timer('%s-%d-%s-%d-%d' % (mth, batch_size, dataset, i, random_id)):
+                    perfs = evaluate_parallel(mth, batch_size, dataset, random_id)
+                    print("len=", len(perfs), "unique=", len(set(perfs)))
 
-            # todo plot std figsize
-            x = np.arange(len(mean_res)) + 1
-            # p, = plt.plot(mean_res)
-            p = plt.errorbar(x, mean_res, yerr=std_res*0.2, fmt='', capthick=0.5, capsize=3, errorevery=2)
-            plot_list.append(p)
-            legend_list.append(mth)
-        plt.legend(plot_list, legend_list, loc='upper right')
-        plt.title(dataset)
-        plt.xlabel("Iteration")
-        plt.ylabel("Negative Balanced Accuracy Score")
-        plt.show()
+                    mth_str = mth + '-' + str(batch_size)
+                    timestamp = time.strftime('%Y-%m-%d-%H:%M:%S', time.localtime(time.time()))
+                    dir_path = 'logs/litebo_benchmark_lightgbm_%d/%s/' % (max_runs, mth_str)
+                    file = 'benchmark_%s_%s_%s_%04d.pkl' % (mth_str, dataset, timestamp, random_id)
+                    if not os.path.exists(dir_path):
+                        os.makedirs(dir_path)
+                    with open(os.path.join(dir_path, file), 'wb') as f:
+                        pk.dump(perfs, f)
