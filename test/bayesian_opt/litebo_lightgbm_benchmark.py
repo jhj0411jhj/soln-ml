@@ -39,6 +39,7 @@ parser.add_argument('--datasets', type=str, default=default_datasets)
 parser.add_argument('--n_jobs', type=int, default=2)
 parser.add_argument('--n', type=int, default=200)
 parser.add_argument('--rep', type=int, default=1)
+parser.add_argument('--start_id', type=int, default=0)
 
 args = parser.parse_args()
 test_datasets = args.datasets.split(',')
@@ -46,6 +47,10 @@ print("datasets num=", len(test_datasets))
 mths = args.mths.split(',')
 plot_mode = args.plot_mode
 max_runs = args.n
+start_id = args.start_id
+
+seeds = [4465, 3822, 4531, 8459, 6295, 2854, 7820, 4050, 280, 6983,
+         5497, 83, 9801, 8760, 5765, 6142, 4158, 9599, 1776, 1656]
 
 
 class LightGBM:
@@ -127,8 +132,8 @@ def get_estimator(config):
     return estimator
 
 
-def evaluate(mth, dataset, run_id):
-    print(mth, dataset, run_id)
+def evaluate(mth, dataset, seed):
+    print(mth, dataset, seed)
     train_data, test_data = load_train_test_data(dataset, test_size=0.3, task_type=MULTICLASS_CLS)
 
     def objective_function(config):
@@ -151,7 +156,7 @@ def evaluate(mth, dataset, run_id):
 
     if mth == 'lite_bo':
         bo = SMBO(objective_function, config_space, max_runs=max_runs, time_limit_per_trial=600,
-                  random_state=np.random.randint(10000))
+                  random_state=seed)
         bo.run()
         perfs = bo.benchmark_perfs
     elif mth == 'smac':
@@ -163,7 +168,7 @@ def evaluate(mth, dataset, run_id):
                              "cs": config_space,
                              "deterministic": "true"
                              })
-        smac = SMAC(scenario=scenario, rng=np.random.RandomState(42),
+        smac = SMAC(scenario=scenario, rng=np.random.RandomState(seed),
                     tae_runner=objective_function)
         # incumbent = smac.optimize()
         # perf_bo = objective_function(incumbent)
@@ -175,7 +180,8 @@ def evaluate(mth, dataset, run_id):
         config_space = get_configspace('tpe')
         from hyperopt import tpe, fmin, Trials
         trials = Trials()
-        fmin(tpe_objective_function, config_space, tpe.suggest, max_runs, trials=trials)
+        fmin(tpe_objective_function, config_space, tpe.suggest, max_runs, trials=trials,
+             rstate=np.random.RandomState(seed))
         perfs = [trial['result']['loss'] for trial in trials.trials]
     else:
         raise ValueError('Invalid method.')
@@ -221,7 +227,7 @@ def descending(x):
         return _descending(x)
 
 
-if plot_mode != 1:
+if plot_mode == 0:
     n_jobs = args.n_jobs
     rep = args.rep
 
@@ -229,20 +235,52 @@ if plot_mode != 1:
         check_datasets(test_datasets)
         for dataset in test_datasets:
             for mth in mths:
-                for i in range(rep):
-                    random_id = np.random.randint(10000)
-                    with Timer('%s-%s-%d-%d' % (mth, dataset, i, random_id)):
-                        perfs = evaluate(mth, dataset, random_id)
+                for i in range(start_id, start_id + rep):
+                    seed = seeds[i]
+                    with Timer('%s-%s-%d-%d' % (mth, dataset, i, seed)):
+                        perfs = evaluate(mth, dataset, seed)
                         print("len=", len(perfs), "unique=", len(set(perfs)))
 
                         timestamp = time.strftime('%Y-%m-%d-%H:%M:%S', time.localtime(time.time()))
                         dir_path = 'logs/litebo_benchmark_lightgbm_%d/%s/' % (max_runs, mth)
-                        file = 'benchmark_%s_%s_%s_%04d.pkl' % (mth, dataset, timestamp, random_id)
+                        file = 'benchmark_%s_%s_%s_%04d.pkl' % (mth, dataset, timestamp, seed)
                         if not os.path.exists(dir_path):
                             os.makedirs(dir_path)
                         with open(os.path.join(dir_path, file), 'wb') as f:
                             pk.dump(perfs, f)
                         print(dir_path, file, 'saved!')
+
+elif plot_mode == 1:
+    import tabulate
+    headers = ['dataset']
+    headers.extend(mths)
+    tbl_data = []
+
+    for dataset in test_datasets:
+        row_data = [dataset]
+        mean_list = []
+        for mth in mths:
+            incumbent = []
+            dir_path = 'logs/litebo_benchmark_lightgbm_%d/%s/' % (max_runs, mth)
+            for file in os.listdir(dir_path):
+                if file.startswith('benchmark_%s_%s_' % (mth, dataset)) and file.endswith('.pkl'):
+                    with open(os.path.join(dir_path, file), 'rb') as f:
+                        perfs = pk.load(f)
+                    if len(perfs) != max_runs:
+                        print('Error len: ', file, len(perfs), type(perfs))
+                        continue
+                    incumbent.append(-min(perfs)*100)   # positive score
+            print('result rep=', len(incumbent))
+            mean_res = np.mean(incumbent)
+            std_res = np.std(incumbent)
+
+            mean_list.append(mean_res)
+            data_point = u'%.3f\u00B1%.3f' % (mean_res.item(), std_res.item())
+            row_data.append(data_point)
+        row_data[np.argsort(mean_list)[-1] + 1] += '**'  # mark best mth for each dataset
+        row_data[np.argsort(mean_list)[-2] + 1] += '*'   # mark second best mth for each dataset
+        tbl_data.append(row_data)
+    print(tabulate.tabulate(tbl_data, headers, tablefmt='github'))
 
 else:
     import matplotlib.pyplot as plt
@@ -264,7 +302,7 @@ else:
             mean_res = np.mean(result, axis=0)
             std_res = np.std(result, axis=0)
 
-            # todo plot std figsize
+            # plot
             x = np.arange(len(mean_res)) + 1
             # p, = plt.plot(mean_res)
             p = plt.errorbar(x, mean_res, yerr=std_res*0.2, fmt='', capthick=0.5, capsize=3, errorevery=max_runs//10)

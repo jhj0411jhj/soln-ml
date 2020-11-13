@@ -39,6 +39,7 @@ parser.add_argument('--datasets', type=str, default=default_datasets)
 parser.add_argument('--n_jobs', type=int, default=2)
 parser.add_argument('--n', type=int, default=200)
 parser.add_argument('--rep', type=int, default=1)
+parser.add_argument('--start_id', type=int, default=0)
 
 parser.add_argument('--batch_size', type=int, default=8)
 parser.add_argument('--ip', type=str, default='127.0.0.1')
@@ -51,10 +52,14 @@ mths = args.mths.split(',')
 max_runs = args.n
 n_jobs = args.n_jobs
 rep = args.rep
+start_id = args.start_id
 
 batch_size = args.batch_size
 ip = args.ip
 port = args.port
+
+seeds = [4465, 3822, 4531, 8459, 6295, 2854, 7820, 4050, 280, 6983,
+         5497, 83, 9801, 8760, 5765, 6142, 4158, 9599, 1776, 1656]
 
 
 class LightGBM:
@@ -136,9 +141,9 @@ def get_estimator(config):
     return estimator
 
 
-def evaluate_parallel(mth, batch_size, dataset, run_id, ip, port):
+def evaluate_parallel(mth, batch_size, dataset, seed, ip, port):
     assert mth in ['sync', 'async']
-    print(mth, batch_size, dataset, run_id)
+    print(mth, batch_size, dataset, seed)
     if port == 0:
         port = 13579 + np.random.randint(1000)
     print('ip=', ip, 'port=', port)
@@ -157,7 +162,7 @@ def evaluate_parallel(mth, batch_size, dataset, run_id, ip, port):
 
     def master_run(return_list):
         bo = mqSMBO(None, config_space, max_runs=max_runs, time_limit_per_trial=600, parallel_strategy=mth,
-                    batch_size=batch_size, ip='', port=port, random_state=np.random.randint(10000))
+                    batch_size=batch_size, ip='', port=port, random_state=seed)
         bo.run()
         return_list.extend(bo.benchmark_perfs[:max_runs])   # send to return list. may exceed max_runs in sync
 
@@ -215,16 +220,16 @@ with Timer('All'):
     check_datasets(test_datasets)
     for dataset in test_datasets:
         for mth in mths:
-            for i in range(rep):
-                random_id = np.random.randint(10000)
-                with Timer('%s-%d-%s-%d-%d' % (mth, batch_size, dataset, i, random_id)):
-                    perfs = evaluate_parallel(mth, batch_size, dataset, random_id, ip, port)
+            for i in range(start_id, start_id + rep):
+                seed = seeds[i]
+                with Timer('%s-%d-%s-%d-%d' % (mth, batch_size, dataset, i, seed)):
+                    perfs = evaluate_parallel(mth, batch_size, dataset, seed, ip, port)
                     print("len=", len(perfs), "unique=", len(set(perfs)))
 
                     mth_str = mth + '-' + str(batch_size)
                     timestamp = time.strftime('%Y-%m-%d-%H:%M:%S', time.localtime(time.time()))
                     dir_path = 'logs/litebo_benchmark_lightgbm_%d/%s/' % (max_runs, mth_str)
-                    file = 'benchmark_%s_%s_%s_%04d.pkl' % (mth_str, dataset, timestamp, random_id)
+                    file = 'benchmark_%s_%s_%s_%04d.pkl' % (mth_str, dataset, timestamp, seed)
                     if not os.path.exists(dir_path):
                         os.makedirs(dir_path)
                     with open(os.path.join(dir_path, file), 'wb') as f:
