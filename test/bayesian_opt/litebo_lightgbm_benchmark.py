@@ -242,6 +242,7 @@ if plot_mode != 1:
                             os.makedirs(dir_path)
                         with open(os.path.join(dir_path, file), 'wb') as f:
                             pk.dump(perfs, f)
+                        print(dir_path, file, 'saved!')
 
 else:
     import matplotlib.pyplot as plt
@@ -255,7 +256,9 @@ else:
                 if file.startswith('benchmark_%s_%s_' % (mth, dataset)) and file.endswith('.pkl'):
                     with open(os.path.join(dir_path, file), 'rb') as f:
                         perfs = pk.load(f)
-                    assert len(perfs) == max_runs
+                    if len(perfs) != max_runs:
+                        print('Error len: ', file, len(perfs), type(perfs))
+                        continue
                     result.append(descending(perfs))    # descent curve
             print('result rep=', len(result))
             mean_res = np.mean(result, axis=0)
@@ -264,7 +267,7 @@ else:
             # todo plot std figsize
             x = np.arange(len(mean_res)) + 1
             # p, = plt.plot(mean_res)
-            p = plt.errorbar(x, mean_res, yerr=std_res*0.2, fmt='', capthick=0.5, capsize=3, errorevery=2)
+            p = plt.errorbar(x, mean_res, yerr=std_res*0.2, fmt='', capthick=0.5, capsize=3, errorevery=max_runs/10)
             plot_list.append(p)
             legend_list.append(mth)
         plt.legend(plot_list, legend_list, loc='upper right')

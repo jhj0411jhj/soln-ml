@@ -54,8 +54,7 @@ rep = args.rep
 
 batch_size = args.batch_size
 ip = args.ip
-port = args.port if args.port else 13579 + np.random.randint(1000)
-print("port=", port)
+port = args.port
 
 
 class LightGBM:
@@ -137,9 +136,13 @@ def get_estimator(config):
     return estimator
 
 
-def evaluate_parallel(mth, batch_size, dataset, run_id):
+def evaluate_parallel(mth, batch_size, dataset, run_id, ip, port):
     assert mth in ['sync', 'async']
     print(mth, batch_size, dataset, run_id)
+    if port == 0:
+        port = 13579 + np.random.randint(1000)
+    print('ip=', ip, 'port=', port)
+
     train_data, test_data = load_train_test_data(dataset, test_size=0.3, task_type=MULTICLASS_CLS)
 
     def objective_function(config):
@@ -169,12 +172,17 @@ def evaluate_parallel(mth, batch_size, dataset, run_id):
     master.start()
 
     time.sleep(15)  # wait for master init
+    worker_pool = []
     for i in range(batch_size):
         worker = Process(target=worker_run, args=(i,))
+        worker_pool.append(worker)
         worker.start()
 
     master.join()   # wait for master to gen result
-    return list(perfs)  # covert it
+    for w in worker_pool:   # optional if repeat=1
+        w.join()
+
+    return list(perfs)  # covert to list
 
 
 def check_datasets(datasets, task_type=MULTICLASS_CLS):
@@ -210,7 +218,7 @@ with Timer('All'):
             for i in range(rep):
                 random_id = np.random.randint(10000)
                 with Timer('%s-%d-%s-%d-%d' % (mth, batch_size, dataset, i, random_id)):
-                    perfs = evaluate_parallel(mth, batch_size, dataset, random_id)
+                    perfs = evaluate_parallel(mth, batch_size, dataset, random_id, ip, port)
                     print("len=", len(perfs), "unique=", len(set(perfs)))
 
                     mth_str = mth + '-' + str(batch_size)
@@ -221,3 +229,4 @@ with Timer('All'):
                         os.makedirs(dir_path)
                     with open(os.path.join(dir_path, file), 'wb') as f:
                         pk.dump(perfs, f)
+                    print(dir_path, file, 'saved!')
