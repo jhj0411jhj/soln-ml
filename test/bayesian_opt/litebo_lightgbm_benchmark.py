@@ -267,7 +267,7 @@ else:
             # todo plot std figsize
             x = np.arange(len(mean_res)) + 1
             # p, = plt.plot(mean_res)
-            p = plt.errorbar(x, mean_res, yerr=std_res*0.2, fmt='', capthick=0.5, capsize=3, errorevery=max_runs/10)
+            p = plt.errorbar(x, mean_res, yerr=std_res*0.2, fmt='', capthick=0.5, capsize=3, errorevery=max_runs//10)
             plot_list.append(p)
             legend_list.append(mth)
         plt.legend(plot_list, legend_list, loc='upper right')
